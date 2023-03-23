@@ -154,13 +154,23 @@ class FoldingTrunk(nn.Module):
         # where the chunk_size is the size of the chunks, so 128 would mean to parse 128-lengthed chunks.
         self.chunk_size = chunk_size
 
-    def forward(self, seq_feats, pair_feats, true_aa, residx, mask, no_recycles: T.Optional[int] = None):
+    def forward(
+        self,
+        seq_feats,
+        pair_feats,
+        true_aa,
+        residx,
+        mask,
+        no_recycles: T.Optional[int] = None,
+        rsr_feats: T.Optional[int] = None,
+    ):
         """
         Inputs:
           seq_feats:     B x L x C            tensor of sequence features
           pair_feats:    B x L x L x C        tensor of pair features
           residx:        B x L                long tensor giving the position in the sequence
           mask:          B x L                boolean tensor indicating valid residues
+          rsr_feats:     B x L x L
 
         Output:
           predicted_structure: B x L x (num_atoms_per_residue * 3) tensor wrapped in a Coordinates object
@@ -174,7 +184,9 @@ class FoldingTrunk(nn.Module):
             no_recycles = self.cfg.max_recycles
         else:
             assert no_recycles >= 0, "Number of recycles must not be negative."
-            no_recycles += 1  # First 'recycle' is just the standard forward pass through the model.
+            no_recycles += (
+                1  # First 'recycle' is just the standard forward pass through the model.
+            )
 
         def trunk_iter(s, z, residx, mask):
             z = z + self.pairwise_positional_embedding(residx, mask=mask)
@@ -187,7 +199,10 @@ class FoldingTrunk(nn.Module):
         s_z = s_z_0
         recycle_s = torch.zeros_like(s_s)
         recycle_z = torch.zeros_like(s_z)
-        recycle_bins = torch.zeros(*s_z.shape[:-1], device=device, dtype=torch.int64)
+        if rsr_feats is None:
+            recycle_bins = torch.zeros(*s_z.shape[:-1], device=device, dtype=torch.int64)
+        else:
+            recycle_bins = rsr_feats
 
         assert no_recycles > 0
         for recycle_idx in range(no_recycles):
