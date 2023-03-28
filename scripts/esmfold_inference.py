@@ -13,7 +13,6 @@ import torch
 
 import esm
 from esm.data import read_fasta
-from esm.esmfold.v1.misc import collate_dense_tensors
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -76,22 +75,6 @@ def create_batched_sequence_datasest(
     yield batch_headers, batch_sequences
 
 
-def get_masking_pattern(
-    sequences: T.List[str], masking_rate: float, chain_linker: T.Optional[str] = "G" * 25
-) -> T.List[torch.Tensor]:
-    masking_patterns = []
-    for seq in sequences:
-        chains = seq.split(":")
-        seq = chain_linker.join(chains)
-        r = torch.rand(len(seq))
-        masking_pattern = (r < masking_rate).type(torch.long)
-        masking_patterns.append(masking_pattern)
-
-    masking_patterns = collate_dense_tensors(masking_patterns)
-
-    return masking_patterns
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -134,8 +117,6 @@ if __name__ == "__main__":
         "result in lower memory usage at the cost of speed. Recommended values: 128, 64, 32. "
         "Default: None.",
     )
-    parser.add_argument("--masking-rate", type=float, default=0.0, help="Masking rates. [0, 1)")
-    parser.add_argument("--sample", type=int, default=0, help="Number of samples per sequence")
     parser.add_argument("--cpu-only", help="CPU only", action="store_true")
     parser.add_argument("--cpu-offload", help="Enable CPU offloading", action="store_true")
     args = parser.parse_args()
@@ -152,28 +133,17 @@ if __name__ == "__main__":
 
     all_sequences = []
     for header, seq in all_sequences0:
-        if args.sample == 0:
-            output_file = args.pdb / f"{header}.pdb"
-            if output_file.exists():
-                logger.info(f"Found an existing output file: {str(output_file)}")
-            else:
-                all_sequences.append((header, seq))
+        output_file = args.pdb / f"{header}.pdb"
+        if output_file.exists():
+            logger.info(f"Found an existing output file: {str(output_file)}")
         else:
-            for i in range(args.sample):
-                header_i = f"{header}.{int(args.masking_rate*100)}.{i}"
-                all_sequences.append((f"{header_i}", seq))
+            all_sequences.append((header, seq))
 
     if len(all_sequences) == 0:
         logger.info("There is no sequence to predict.")
         sys.exit()
 
-    if args.sample == 0:
-        logger.info(f"Set to predict {len(all_sequences)} sequences")
-    else:
-        logger.info(f"Set to sample {len(all_sequences)//args.sample} sequences")
-        logger.info(f"Number of samples per sequence: {args.sample}")
-        logger.info(f"Masking rate: {int(100*args.masking_rate)} %")
-
+    logger.info(f"Set to predict {len(all_sequences)} sequences")
     logger.info("Loading model")
 
     # Use pre-downloaded ESM weights from model_pth.
@@ -201,14 +171,7 @@ if __name__ == "__main__":
     for headers, sequences in batched_sequences:
         start = timer()
         try:
-            if args.masking_rate > 0.0:
-                masking_pattern = get_masking_pattern(sequences, args.masking_rate)
-                masking_pattern = masking_pattern.to(model.device)
-            else:
-                masking_pattern = None
-            output = model.infer(
-                sequences, num_recycles=args.num_recycles, masking_pattern=masking_pattern
-            )
+            output = model.infer(sequences, num_recycles=args.num_recycles)
         except RuntimeError as e:
             if e.args[0].startswith("CUDA out of memory"):
                 if len(sequences) > 1:
