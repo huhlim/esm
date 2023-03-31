@@ -27,8 +27,14 @@ from openfold.utils.loss import compute_predicted_aligned_error, compute_tm
 
 @dataclass
 class ESMFoldConfig:
+    esm_type: str = "esm2_3B"
+    #
     trunk: T.Any = FoldingTrunkConfig()
     lddt_head_hid_dim: int = 128
+    #
+    fp16_esm: bool = True
+    use_esm_attn_map: bool = False
+    embed_aa: bool = True
 
 
 load_fn = esm.pretrained.load_model_and_alphabet
@@ -59,7 +65,8 @@ class ESMFold(nn.Module):
         self.esm, self.esm_dict = esm_registry.get(cfg.esm_type)()
 
         self.esm.requires_grad_(False)
-        self.esm.half()
+        if cfg.fp16_esm:
+            self.esm.half()
 
         self.esm_feats = self.esm.embed_dim
         self.esm_attns = self.esm.num_layers * self.esm.attention_heads
@@ -88,7 +95,8 @@ class ESMFold(nn.Module):
         self.pad_idx = 0
         self.unk_idx = self.n_tokens_embed - 2
         self.mask_idx = self.n_tokens_embed - 1
-        self.embedding = nn.Embedding(self.n_tokens_embed, c_s, padding_idx=0)
+        if cfg.embed_aa:
+            self.embedding = nn.Embedding(self.n_tokens_embed, c_s, padding_idx=0)
 
         self.trunk = FoldingTrunk(**cfg.trunk)
 
@@ -207,7 +215,8 @@ class ESMFold(nn.Module):
         else:
             s_z_0 = s_s_0.new_zeros(B, L, L, self.cfg.trunk.pairwise_state_dim)
 
-        s_s_0 += self.embedding(aa)
+        if self.cfg.embed_aa:
+            s_s_0 += self.embedding(aa)
 
         structure: dict = self.trunk(
             s_s_0, s_z_0, aa, residx, mask, no_recycles=num_recycles
